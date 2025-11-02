@@ -11,13 +11,13 @@ from typing import Optional, Dict, Any, Union
 from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import numpy as np
 from PIL import Image
 import uvicorn
 
-# Import agent modules
 from .vision_agent import VisionAgent
 from .reasoner_agent import ReasonerAgent
 from .governor_agent import GovernorAgent
@@ -109,38 +109,23 @@ class HealthCheckResponse(BaseModel):
     agents_loaded: bool
 
 
-app = FastAPI(
-    title="Ophthalmic Agentic AI System",
-    description="Multi-agent system for diabetic retinopathy detection with AI",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 vision_agent: Optional[VisionAgent] = None
 reasoner_agent: Optional[ReasonerAgent] = None
 governor_agent: Optional[GovernorAgent] = None
 orchestrator: Optional[ReactOrchestrator] = None
 
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     """
-    Initialize all agents on startup.
+    Lifespan event handler for startup and shutdown.
 
-    Loads Vision, Reasoner, Governor agents and ReAct orchestrator.
+    Startup: Initialize all agents before the app starts receiving requests.
+    Shutdown: Clean up resources after the app finishes.
     """
     global vision_agent, reasoner_agent, governor_agent, orchestrator
 
+    # Startup logic
     try:
         logger.info("Initializing Ophthalmic Agentic AI System...")
 
@@ -161,10 +146,40 @@ async def startup_event():
         )
 
         logger.info("All agents initialized successfully")
-
     except Exception as e:
         logger.error(f"Failed to initialize agents: {e}")
         raise
+
+    yield  # Application runs here
+
+    # Shutdown logic
+    logger.info("Shutting down Ophthalmic Agentic AI System...")
+    try:
+        vision_agent = None
+        reasoner_agent = None
+        governor_agent = None
+        orchestrator = None
+        logger.info("Cleanup completed")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+
+
+app = FastAPI(
+    title="Ophthalmic Agentic AI System",
+    description="Multi-agent system for diabetic retinopathy detection with AI",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def numpy_to_base64(array: np.ndarray) -> Union[str, None]:
@@ -559,7 +574,3 @@ async def get_agents_status():
         },
         "orchestrator": {"loaded": orchestrator is not None},
     }
-
-
-if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=False, log_level="info")
