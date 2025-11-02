@@ -7,7 +7,7 @@ Handles model loading, preprocessing, prediction, and Grad-CAM visualization.
 
 import logging
 from typing import Dict, Any, Tuple
-
+import uuid
 import numpy as np
 import torch
 import cv2
