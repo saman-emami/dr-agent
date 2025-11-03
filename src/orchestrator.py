@@ -40,8 +40,6 @@ class ReactExecutionResult:
         Whether rule-based fallback was triggered.
     execution_time_seconds : float
         Total execution time in seconds.
-    error_message : str or None
-        Error description if execution failed.
     """
 
     session_id: str
@@ -50,7 +48,6 @@ class ReactExecutionResult:
     total_iterations: int
     fallback_activated: bool
     execution_time_seconds: float
-    error_message: Optional[str] = None
 
 
 class ReactOrchestrator:
@@ -137,20 +134,27 @@ class ReactOrchestrator:
         total_iterations = 0
         fallback_activated = False
         final_result = None
-        error_message = None
 
         # Phase 1: LLM-based reasoning
-        self.reasoner_agent.switch_reasoning_mode(use_llm=True)
-        logger.info(f"Phase 1: LLM reasoning (max {self.maximum_llm_retries} attempts)")
-        for iteration in range(1, self.maximum_llm_retries + 1):
+        logger.info(f"LLM reasoning (max {self.maximum_llm_retries} attempts)")
+        # one for the first iteration + number of retries + one last iteration with rule-based fallback
+        iteration_count = self.maximum_llm_retries + 2
+
+        for iteration in range(1, iteration_count):
             if time.time() - start_time > self.timeout_seconds:
-                error_message = "Timeout exceeded"
+                logger.info("Timeout exceeded")
                 break
 
             total_iterations += 1
             logger.info(f"Iteration {iteration}: LLM reasoning")
-
+            original_mode = self.reasoner_agent.use_llm
             try:
+                last_try = total_iterations == iteration_count
+                if last_try and original_mode:
+                    self.reasoner_agent.switch_reasoning_mode(use_llm=False)
+                    fallback_activated = True
+                    logger.info("Rule-based fallback activated")
+
                 reasoning_output = self.reasoner_agent.reason(
                     vision_output=vision_output,
                     patient_metadata=patient_metadata,
@@ -175,32 +179,9 @@ class ReactOrchestrator:
 
             except Exception as error:
                 logger.error(f"Iteration {iteration} error: {error}")
-
-        # Phase 2: Rule-based fallback if unsuccessful
-        if final_result is None and error_message is None:
-            self.reasoner_agent.switch_reasoning_mode(use_llm=False)
-            print("switch to rule based....")
-            logger.info("Phase 2: Single rule-based fallback")
-            fallback_activated = True
-            total_iterations += 1
-
-            self.reasoner_agent.use_llm = False
-            reasoning_output = self.reasoner_agent.reason(
-                vision_output=vision_output, patient_metadata=patient_metadata
-            )
-            governance_result = self.governor_agent.govern(
-                vision_output=vision_output, reasoning_output=reasoning_output
-            )
-            validated = governance_result.get("governance", {}).get("validated", False)
-
-            if validated:
-                final_result = governance_result
-                logger.info("✓ Fallback (rule-based) validation passed")
-            else:
-                logger.warning("✗ Fallback (rule-based) validation failed")
-                error_message = (
-                    "All LLM attempts and the single rule-based fallback failed"
-                )
+            finally:
+                if original_mode != self.reasoner_agent.use_llm:
+                    self.reasoner_agent.switch_reasoning_mode(use_llm=original_mode)
 
         # Finalize result
         execution_time = time.time() - start_time
@@ -213,7 +194,6 @@ class ReactOrchestrator:
             total_iterations=total_iterations,
             fallback_activated=fallback_activated,
             execution_time_seconds=round(execution_time, 3),
-            error_message=error_message,
         )
 
         logger.info(
